@@ -3,6 +3,18 @@ import OtpInput from "./components/antd/OtpInput";
 import OTPSender from "./components/antd/OTPSender";
 import OTPVerify from "./components/antd/OTPVerify";
 
+// Импорт компонентов Supabase
+import { 
+  SupabaseUserGlobalContext, 
+  SupabaseUserGlobalContextMeta 
+} from "./components/supabase";
+
+// Логи для отладки
+const logPrefix = '[PlasmicInit]';
+const debug = (...args: any[]) => console.log(logPrefix, ...args);
+
+debug('Инициализация Plasmic');
+
 export const PLASMIC = initPlasmicLoader({
   projects: [
     {
@@ -11,21 +23,18 @@ export const PLASMIC = initPlasmicLoader({
     },
   ],
 
-  // By default Plasmic will use the last published version of your project.
-  // For development, you can set preview to true, which will use the unpublished
-  // project, allowing you to see your designs without publishing.  Please
-  // only use this for development, as this is significantly slower.
+  // По умолчанию Plasmic будет использовать последнюю опубликованную версию вашего проекта.
+  // Для разработки вы можете установить preview в true, что будет использовать неопубликованный
+  // проект, позволяя видеть ваши дизайны без публикации. Пожалуйста,
+  // используйте это только для разработки, так как это значительно медленнее.
   preview: true,
 });
 
-// You can register any code components that you want to use here; see
-// https://docs.plasmic.app/learn/code-components-ref/
-// And configure your Plasmic project to use the host url pointing at
-// the /plasmic-host page of your nextjs app (for example,
-// http://localhost:3000/plasmic-host).  See
-// https://docs.plasmic.app/learn/app-hosting/#set-a-plasmic-project-to-use-your-app-host
+// Регистрация глобального контекста Supabase
+debug('Регистрация SupabaseUserGlobalContext');
+PLASMIC.registerGlobalContext(SupabaseUserGlobalContext, SupabaseUserGlobalContextMeta);
 
-// Register components
+// Регистрация компонентов
 PLASMIC.registerComponent(OtpInput, {
   name: "OtpInput",
   props: {

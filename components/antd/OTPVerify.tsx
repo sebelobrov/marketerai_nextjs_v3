@@ -1,5 +1,6 @@
 import React, { forwardRef, useImperativeHandle } from 'react';
 import { DataProvider } from '@plasmicapp/host';
+import createClient from '../../utils/supabase/component';
 
 interface OTPVerifyProps {
   onSuccess?: (message: string) => void;
@@ -42,43 +43,58 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
           message: `Verifying OTP for ${email}...`
         });
         
-        // Создаем искусственную задержку в 5 секунд
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Используем Supabase клиент напрямую
+        const supabase = createClient();
         
-        // Здесь будет реальная логика проверки OTP кода
-        // Сейчас это заглушка, которая всегда возвращает успех
-        const newResult = { 
-          success: false, 
-          message: `OTP verification successful for ${email}` 
-        };
+        // Проверяем OTP код
+        const { error } = await supabase.auth.verifyOtp({
+          email,
+          token: otp,
+          type: 'email'
+        });
         
-        // Сохраняем результат в состоянии компонента
-        setResult(newResult);
-        console.log("OTP verified successfully, new result:", newResult);
-
-        // Вызываем соответствующий колбэк в зависимости от результата
-        if (newResult.success && onSuccess) {
-          onSuccess(newResult.message);
-        } else if (!newResult.success && onError) {
-          onError(newResult.message);
+        if (error) {
+          console.error('Ошибка верификации OTP:', error);
+          setResult({
+            success: false,
+            message: error.message
+          });
+          if (onError) onError(error.message);
+          return {
+            success: false,
+            message: error.message
+          };
         }
-
-        return newResult;
+        
+        console.log('Верификация OTP успешна, перенаправление на onboarding');
+        setResult({
+          success: true,
+          message: 'Вход выполнен успешно'
+        });
+        
+        if (onSuccess) onSuccess('Вход выполнен успешно');
+        
+        // После успешной верификации перенаправляем на страницу onboarding
+        window.location.href = '/onboarding';
+        
+        return {
+          success: true,
+          message: 'Вход выполнен успешно'
+        };
       } catch (error) {
-        // В случае ошибки
-        const errorResult = { 
-          success: false, 
-          message: error instanceof Error ? error.message : 'Unknown error' 
+        console.error('Ошибка при верификации OTP:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при верификации кода';
+        setResult({
+          success: false,
+          message: errorMessage
+        });
+        
+        if (onError) onError(errorMessage);
+        
+        return {
+          success: false,
+          message: errorMessage
         };
-        
-        setResult(errorResult);
-        console.error("Error verifying OTP:", errorResult);
-        
-        if (onError) {
-          onError(errorResult.message);
-        }
-        
-        return errorResult;
       }
     }
   }), [onSuccess, onError]);

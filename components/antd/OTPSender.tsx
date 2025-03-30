@@ -1,5 +1,6 @@
 import React, { forwardRef, useImperativeHandle } from 'react';
 import { DataProvider } from '@plasmicapp/host';
+import createClient from '../../utils/supabase/component';
 
 interface OTPSenderProps {
   onSuccess?: (message: string) => void;
@@ -42,25 +43,36 @@ const OTPSender = forwardRef<OTPSenderActions, OTPSenderProps>(({
           message: `Sending OTP to ${email}...`
         });
         
-        // Создаем искусственную задержку в 5 секунд
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Используем Supabase клиент напрямую
+        const supabase = createClient();
         
-        // Здесь будет реальная логика отправки OTP кода
-        // Сейчас это заглушка, которая всегда возвращает успех
+        // Отправляем ссылку для одноразового входа на email
+        const { error } = await supabase.auth.signInWithOtp({
+          email,
+          options: {
+            // Эта опция отключает автоматическую авторизацию при переходе по ссылке,
+            // чтобы пользователь должен был ввести OTP код вручную
+            shouldCreateUser: true,
+          }
+        });
+        
+        if (error) {
+          throw error;
+        }
+        
+        // Создаем результат успешной отправки
         const newResult = { 
           success: true, 
-          message: `Test function executed for ${email}` 
+          message: `Код подтверждения отправлен на ${email}` 
         };
         
         // Сохраняем результат в состоянии компонента
         setResult(newResult);
-        console.log("OTP sent successfully, new result:", newResult);
+        console.log("OTP send result:", newResult);
 
         // Вызываем соответствующий колбэк в зависимости от результата
         if (newResult.success && onSuccess) {
           onSuccess(newResult.message);
-        } else if (!newResult.success && onError) {
-          onError(newResult.message);
         }
 
         return newResult;
