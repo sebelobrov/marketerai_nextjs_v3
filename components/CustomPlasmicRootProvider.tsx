@@ -15,7 +15,7 @@ const AuthLoadingPlaceholder = () => (
     alignItems: 'center', 
     height: '100vh',
     width: '100%',
-    backgroundColor: '#ffffff'
+    backgroundColor: '#ffffff !important'
   }}>
     <div className="loading-spinner"></div>
   </div>
