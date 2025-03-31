@@ -1,11 +1,14 @@
-import React, { forwardRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useImperativeHandle, useCallback } from 'react';
 import { DataProvider } from '@plasmicapp/host';
-import createClient from '../../utils/supabase/component';
+import { createClient } from '../../utils/supabase/client';
 
 interface OTPVerifyProps {
   onSuccess?: (message: string) => void;
   onError?: (message: string) => void;
   children?: React.ReactNode; // Поддержка дочерних элементов
+  email?: string; // Опциональный email для контекста
+  code?: string; // Опциональный код
+  autoVerify?: boolean; // Флаг для автоматической верификации
 }
 
 interface OTPVerifyActions {
@@ -15,15 +18,21 @@ interface OTPVerifyActions {
 const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({ 
   onSuccess, 
   onError,
-  children 
+  children,
+  email: initialEmail,
+  code: initialCode,
+  autoVerify = false
 }, ref) => {
+  // Флаг для отслеживания, была ли уже выполнена верификация
+  const [verified, setVerified] = React.useState(false);
+
   // Устанавливаем начальное значение вместо null
   const [result, setResult] = React.useState<{ 
     success: boolean; 
     message: string;
   }>({
     success: false,
-    message: "Waiting for OTP verification"
+    message: "Ожидание ввода кода подтверждения"
   });
 
   // Сообщаем в консоль о текущем состоянии result для отладки
@@ -31,73 +40,89 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
     console.log("OTPVerify result:", result);
   }, [result]);
 
-  useImperativeHandle(ref, () => ({
-    // Функция для проверки OTP, которая будет вызываться через Element Action
-    verifyOTP: async (email: string, otp: string) => {
-      try {
-        console.log("Verifying OTP for:", email, "with code:", otp);
-        
-        // Устанавливаем промежуточный статус проверки
-        setResult({
-          success: false,
-          message: `Verifying OTP for ${email}...`
-        });
-        
-        // Используем Supabase клиент напрямую
-        const supabase = createClient();
-        
-        // Проверяем OTP код
-        const { error } = await supabase.auth.verifyOtp({
-          email,
-          token: otp,
-          type: 'email'
-        });
-        
-        if (error) {
-          console.error('Ошибка верификации OTP:', error);
-          setResult({
-            success: false,
-            message: error.message
-          });
-          if (onError) onError(error.message);
-          return {
-            success: false,
-            message: error.message
-          };
-        }
-        
-        console.log('Верификация OTP успешна, перенаправление на onboarding');
-        setResult({
-          success: true,
-          message: 'Вход выполнен успешно'
-        });
-        
-        if (onSuccess) onSuccess('Вход выполнен успешно');
-        
-        // После успешной верификации перенаправляем на страницу onboarding
-        window.location.href = '/onboarding';
-        
-        return {
-          success: true,
-          message: 'Вход выполнен успешно'
-        };
-      } catch (error) {
-        console.error('Ошибка при верификации OTP:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Произошла ошибка при верификации кода';
-        setResult({
-          success: false,
-          message: errorMessage
-        });
-        
-        if (onError) onError(errorMessage);
-        
-        return {
-          success: false,
-          message: errorMessage
-        };
+  // Обернем в useCallback для предотвращения лишних рендеров
+  const handleVerifyOTP = useCallback(async (email: string, otp: string) => {
+    if (!email || !otp) {
+      const errorMsg = 'Пожалуйста, введите email и код подтверждения';
+      setResult({
+        success: false,
+        message: errorMsg
+      });
+      
+      if (onError) {
+        onError(errorMsg);
       }
+      
+      return { success: false, message: errorMsg };
     }
-  }), [onSuccess, onError]);
+    
+    try {
+      console.log("Verifying OTP:", email, otp);
+      
+      // Устанавливаем промежуточный статус проверки
+      setResult({
+        success: false,
+        message: `Проверка кода для ${email}...`
+      });
+      
+      const supabase = createClient();
+      const response = await supabase.auth.verifyOtp({
+        email,
+        token: otp,
+        type: 'email'
+      });
+      
+      if (response.error) {
+        throw response.error;
+      }
+      
+      // Устанавливаем флаг, что верификация выполнена успешно
+      setVerified(true);
+      
+      const successMsg = 'Код успешно подтвержден';
+      setResult({
+        success: true,
+        message: successMsg
+      });
+      
+      if (onSuccess) {
+        onSuccess(successMsg);
+      }
+      
+      // Принудительно перенаправляем пользователя на onboarding после успешной верификации
+      // Задержка обеспечивает корректное сохранение cookies и обработку авторизации
+      setTimeout(() => {
+        console.log("OTPVerify: Принудительное перенаправление на /onboarding");
+        window.location.href = "/onboarding";
+      }, 1000);
+      
+      return { success: true, message: successMsg };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Произошла ошибка при проверке кода';
+      setResult({
+        success: false,
+        message: errorMsg
+      });
+      
+      if (onError) {
+        onError(errorMsg);
+      }
+      
+      return { success: false, message: errorMsg };
+    }
+  }, [onSuccess, onError, setResult]);
+
+  // Автоматическая верификация при наличии нужных параметров
+  React.useEffect(() => {
+    if (autoVerify && initialEmail && initialCode && !verified) {
+      handleVerifyOTP(initialEmail, initialCode);
+    }
+  }, [autoVerify, initialEmail, initialCode, verified, handleVerifyOTP]);
+
+  // Предоставляем метод handleVerifyOTP через ref
+  useImperativeHandle(ref, () => ({
+    verifyOTP: handleVerifyOTP
+  }), [handleVerifyOTP]);
 
   // Предоставляем данные о результате через DataProvider дочерним компонентам
   return (

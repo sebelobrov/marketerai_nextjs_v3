@@ -1,114 +1,127 @@
-import React, { forwardRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useImperativeHandle, useCallback } from 'react';
 import { DataProvider } from '@plasmicapp/host';
-import createClient from '../../utils/supabase/component';
+import { createClient } from '../../utils/supabase/client';
 
-interface OTPSenderProps {
+// Определение интерфейса для свойств компонента
+export interface OTPSenderProps {
+  initialEmail?: string;
+  autoSend?: boolean;
   onSuccess?: (message: string) => void;
   onError?: (message: string) => void;
-  children?: React.ReactNode; // Поддержка дочерних элементов
+  children?: React.ReactNode;
 }
 
-interface OTPSenderActions {
+// Определение интерфейса для ref компонента
+export interface OTPSenderRef {
   sendOTP: (email: string) => Promise<{ success: boolean; message: string }>;
 }
 
-const OTPSender = forwardRef<OTPSenderActions, OTPSenderProps>(({ 
+// Компонент для отправки OTP
+const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({ 
+  initialEmail = '', // По умолчанию пустая строка
   onSuccess, 
   onError,
-  children 
+  children, 
+  autoSend = false // По умолчанию автоматическая отправка отключена
 }, ref) => {
-  // Устанавливаем начальное значение вместо null
+  // Устанавливаем результат отправки OTP
   const [result, setResult] = React.useState<{ 
     success: boolean; 
-    message: string;
-  }>({
-    success: false,
-    message: "Waiting for OTP send operation"
+    message: string; 
+  }>({ 
+    success: false, 
+    message: '' 
   });
 
-  // Сообщаем в консоль о текущем состоянии result для отладки
-  React.useEffect(() => {
-    console.log("OTPSender result:", result);
-  }, [result]);
-
-  useImperativeHandle(ref, () => ({
-    // Функция для отправки OTP, которая будет вызываться через Element Action
-    sendOTP: async (email: string) => {
-      try {
-        console.log("Sending OTP to:", email);
-        
-        // Устанавливаем промежуточный статус отправки
-        setResult({
-          success: false,
-          message: `Sending OTP to ${email}...`
-        });
-        
-        // Используем Supabase клиент напрямую
-        const supabase = createClient();
-        
-        // Отправляем ссылку для одноразового входа на email
-        const { error } = await supabase.auth.signInWithOtp({
-          email,
-          options: {
-            // Эта опция отключает автоматическую авторизацию при переходе по ссылке,
-            // чтобы пользователь должен был ввести OTP код вручную
-            shouldCreateUser: true,
-          }
-        });
-        
-        if (error) {
-          throw error;
-        }
-        
-        // Создаем результат успешной отправки
-        const newResult = { 
-          success: true, 
-          message: `Код подтверждения отправлен на ${email}` 
-        };
-        
-        // Сохраняем результат в состоянии компонента
-        setResult(newResult);
-        console.log("OTP send result:", newResult);
-
-        // Вызываем соответствующий колбэк в зависимости от результата
-        if (newResult.success && onSuccess) {
-          onSuccess(newResult.message);
-        }
-
-        return newResult;
-      } catch (error) {
-        // В случае ошибки
-        const errorResult = { 
-          success: false, 
-          message: error instanceof Error ? error.message : 'Unknown error' 
-        };
-        
-        setResult(errorResult);
-        console.error("Error sending OTP:", errorResult);
-        
-        if (onError) {
-          onError(errorResult.message);
-        }
-        
-        return errorResult;
+  // Обернем в useCallback для предотвращения лишних рендеров
+  const handleSendOTP = useCallback(async (email: string) => {
+    if (!email) {
+      const errorMsg = 'Пожалуйста, введите email';
+      setResult({
+        success: false,
+        message: errorMsg
+      });
+      
+      if (onError) {
+        onError(errorMsg);
       }
+      
+      return { success: false, message: errorMsg };
     }
-  }), [onSuccess, onError]);
+    
+    try {
+      console.log("Sending OTP to:", email);
+      
+      // Устанавливаем промежуточный статус отправки
+      setResult({
+        success: false,
+        message: `Отправка кода на ${email}...`
+      });
+      
+      const supabase = createClient();
+      const response = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+        }
+      });
+      
+      if (response.error) {
+        throw response.error;
+      }
+      
+      // При успешной отправке
+      const successMsg = `Код подтверждения отправлен на ${email}`;
+      setResult({
+        success: true,
+        message: successMsg
+      });
+      
+      if (onSuccess) {
+        onSuccess(successMsg);
+      }
+      
+      return { success: true, message: successMsg };
+    } catch (error) {
+      // В случае ошибки
+      const errorMsg = error instanceof Error ? error.message : 'Произошла ошибка при отправке кода';
+      setResult({
+        success: false,
+        message: errorMsg
+      });
+      
+      console.error("Error sending OTP:", { success: false, message: errorMsg });
+      
+      if (onError) {
+        onError(errorMsg);
+      }
+      
+      return { success: false, message: errorMsg };
+    }
+  }, [onSuccess, onError, setResult]);
+
+  // Отправляем OTP автоматически при монтировании, если указаны autoSend и initialEmail
+  React.useEffect(() => {
+    if (autoSend && initialEmail) {
+      console.log("Auto-sending OTP to:", initialEmail);
+      handleSendOTP(initialEmail);
+    }
+  }, [autoSend, initialEmail, handleSendOTP]);
+
+  // Предоставляем метод sendOTP через ref
+  useImperativeHandle(ref, () => ({
+    sendOTP: handleSendOTP
+  }), [handleSendOTP]); // Добавляем handleSendOTP в зависимости
 
   // Предоставляем данные о результате через DataProvider дочерним компонентам
   return (
-    <DataProvider name="otpSenderResult" data={result}>
-      {children ? (
-        // Если есть дочерние элементы - отображаем их
-        <>{children}</>
-      ) : (
-        // Если дочерних элементов нет - создаем невидимый элемент
-        <div style={{ display: 'none' }}></div>
-      )}
+    <DataProvider name="otpResult" data={result}>
+      {children}
     </DataProvider>
   );
 });
 
+// Имя для отображения в React DevTools
 OTPSender.displayName = 'OTPSender';
 
 export default OTPSender; 

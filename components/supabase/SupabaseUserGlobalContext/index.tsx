@@ -1,145 +1,367 @@
 import React from "react";
 import { DataProvider } from "@plasmicapp/loader-nextjs";
 import { GlobalActionsProvider } from "@plasmicapp/host";
-import { useState, useEffect, useMemo } from "react";
-import createClient from '../../../utils/supabase/component';
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { createClient } from '../../../utils/supabase/client';
 import getErrMsg from "../../../utils/getErrMsg";
-import type { AuthTokenResponse } from "@supabase/supabase-js";
+import type { Session, User, SupabaseClient } from "@supabase/supabase-js";
+import { authManager } from "../../../utils/auth/AuthManager";
 
 // Логи для отладки
 const logPrefix = '[SupabaseUserGlobalContext]';
 const debug = (...message: unknown[]) => console.log(logPrefix, ...message);
 
-// Примечание по использованию window.location для перенаправлений/перезагрузок в этом компоненте
+// Примечание: мы используем window.location для перенаправлений вместо router.push
+// для полной перезагрузки страницы, чтобы middleware мог корректно отработать
 
-// Контекст:
-// Next.js <Link> компоненты предзагружают страницы в фоне для более быстрой навигации
-// Это может вызывать непредсказуемое поведение при использовании Middleware для защиты страниц от неавторизованных пользователей
+// Создаем глобальный объект для хранения состояния авторизации
+// Это позволит всем компонентам, использующим данные авторизации, обновляться при изменении этих данных
+export const AuthState = {
+  user: null as User | null,
+  session: null as Session | null,
+  isAuthenticated: false,
+  isLoading: true,
+  error: null as string | null,
+};
 
-// Сценарий:
-// 1. Пользователь не вошел в систему и посещает страницу, содержащую <Link> на защищенную страницу
-// 2. <Link> предзагружает защищенную страницу. Middleware запускается, кэшируя перенаправление на /login
-// 3. Пользователь входит в систему, но мы НЕ используем window.location.reload или window.location.href для перенаправления
-// 4. Пользователь кликает <Link> на защищенную страницу, но из-за кэшированной предзагрузки, они все еще перенаправляются на /login
-
-// Проблема:
-// Middleware запускается во время предзагрузки, но не во время фактической навигации, что приводит к проверкам устаревшего состояния аутентификации
-
-// Решение:
-// Использовать window.location.reload() или window.location.href для перенаправлений/перезагрузок после логина/логаута
-// Это сбрасывает предзагруженные страницы, гарантируя, что middleware запустится снова на основе нового состояния аутентификации
+// Экспортируем функцию для проверки инициализации авторизации из AuthManager
+export function isAuthInitialized(): boolean {
+  return authManager.getInitialized();
+}
 
 interface DataProviderData {
-  user: AuthTokenResponse["data"]["user"] | null;
+  user: User | null;
   error: string | null;
+  isAuthenticated: boolean;
+  session: Session | null;
+  isLoading: boolean;
+  userFullName: string;
+  userName: string;
+  userEmail: string;
+  userAvatar: string;
+  userPicture: string;
 }
 
 export interface SupabaseUserGlobalContextProps {
   children: React.ReactNode;
-  defaultRedirectOnLoginSuccess?: string;
 }
 
 export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContextProps) => {
-  debug('Рендеринг компонента');
+  // Состояние
+  const [user, setUser] = useState<User | null>(AuthState.user);
+  const [session, setSession] = useState<Session | null>(AuthState.session);
+  const [error, setError] = useState<string | null>(AuthState.error);
+  const [isLoading, setIsLoading] = useState<boolean>(AuthState.isLoading);
   
-  // Настройка состояния
-  const [user, setUser] = useState<AuthTokenResponse["data"]["user"] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Вычисляем статус авторизации только на основе user
+  // т.к. session может еще не быть установлен при первом рендеринге
+  const isAuthenticated = !!user;
+  
+  // Создаем клиент Supabase только один раз
+  const supabaseClient = useMemo<SupabaseClient>(() => createClient(), []);
+  
+  // Флаг инициализации
+  const isInitialized = useRef(false);
+  
+  // Флаг получения данных для дедупликации запросов
+  const isFetchingUser = useRef(false);
 
-  // Вспомогательная функция для получения пользователя и сохранения в состояние
-  async function getUserAndSaveToState() {
-    debug('Получение данных пользователя');
+  // Получение данных пользователя с дедупликацией запросов
+  const getUserData = useCallback(async () => {
+    // Проверяем, не выполняется ли уже запрос данных
+    if (isFetchingUser.current) {
+      debug('Пропуск запроса getUserData: запрос уже выполняется');
+      return;
+    }
+
     try {
-      const supabase = createClient();
-
-      // Получаем сессию из сохраненных учетных данных (не с сервера)
-      const { data: getSessionData, error: getSessionError } = await supabase.auth.getSession();
-      if (getSessionError) {
-        debug('Ошибка при получении сессии:', getSessionError);
-        throw getSessionError;
-      }
-
-      // Если нет сессии, устанавливаем пользователя в null
-      if (!getSessionData.session) {
-        debug('Сессия не найдена, пользователь не авторизован');
-        setUser(null);
-        setError(null);
-        return;
-      }
-
-      // Если есть сессия, сохраняем пользователя в состояние
-      const { data, error } = await supabase.auth.getUser();
-      if (error) {
-        debug('Ошибка при получении пользователя:', error);
-        console.error(error);
-        throw error;
-      }
+      debug('Получаем данные пользователя');
+      setIsLoading(true);
+      isFetchingUser.current = true;
       
-      // Выводим подробную информацию о пользователе для анализа структуры данных
-      debug('Полные данные пользователя:', JSON.stringify(data?.user, null, 2));
+      // Используем только getUser() для повышения безопасности и оптимизации
+      const { data: userData, error: userError } = await supabaseClient.auth.getUser();
       
-      // Проверим все доступные поля пользователя
-      if (data?.user) {
-        debug('ID пользователя:', data.user.id);
-        debug('Email пользователя:', data.user.email);
-        debug('Phone пользователя:', data.user.phone);
-        
-        // Проверяем metadata и user_metadata
-        if (data.user.user_metadata) {
-          debug('user_metadata:', data.user.user_metadata);
-          debug('Имя из user_metadata.name:', data.user.user_metadata.name);
-          debug('Имя из user_metadata.full_name:', data.user.user_metadata.full_name);
+      if (userError) {
+        // Специальная обработка для ошибки отсутствия сессии - обычная ситуация для неавторизованных пользователей
+        if (userError.message === 'Auth session missing!') {
+          debug('Пользователь не авторизован (Auth session missing)');
+          
+          // Очищаем данные в глобальном объекте
+          AuthState.user = null;
+          AuthState.session = null;
+          AuthState.isAuthenticated = false;
+          AuthState.error = null;
+          
+          setUser(null);
+          setSession(null);
+          setError(null);
+          setIsLoading(false);
+          
+          // Считаем авторизацию инициализированной, хотя пользователь не авторизован
+          authManager.setInitialized(true);
+          isFetchingUser.current = false;
+          return;
         }
         
-        if (data.user.app_metadata) {
-          debug('app_metadata:', data.user.app_metadata);
+        debug('Ошибка при получении пользователя:', userError);
+        throw userError;
+      }
+      
+      // Если у нас есть пользователь, получаем сессию для токенов
+      if (userData.user) {
+        debug('Получен пользователь:', userData.user.id);
+        
+        // Если текущий пользователь не изменился, можно пропустить обновление
+        if (user?.id === userData.user.id) {
+          debug('Пропуск обновления данных: пользователь не изменился');
+          // Обновляем только флаг инициализации и загрузки
+          authManager.setInitialized(true);
+          setIsLoading(false);
+          isFetchingUser.current = false;
+          return;
         }
         
-        // Проверяем identity_data (если есть)
-        if (data.user.identities && data.user.identities.length > 0) {
-          debug('identities:', data.user.identities);
-          for (const identity of data.user.identities) {
-            if (identity.identity_data) {
-              debug('identity_data:', identity.identity_data);
-              debug('Имя из identity_data.name:', identity.identity_data.name);
-              debug('Имя из identity_data.full_name:', identity.identity_data.full_name);
-            }
+        // Получаем сессию только для доступа к токенам и метаданным сессии
+        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+        
+        if (sessionError) {
+          debug('Ошибка при получении сессии:', sessionError);
+          // Не выбрасываем ошибку здесь, продолжаем с пользователем
+          debug('Продолжаем без данных сессии');
+        } else {
+          debug('Данные сессии:', sessionData.session ? 'Получены' : 'Отсутствуют');
+          
+          if (sessionData.session) {
+            // Обновляем глобальное состояние сессии
+            AuthState.session = sessionData.session;
+            setSession(sessionData.session);
           }
         }
+        
+        // Обновляем пользователя в глобальном объекте
+        AuthState.user = userData.user;
+        AuthState.isAuthenticated = true;
+        
+        // Устанавливаем пользователя, чтобы предотвратить промежуточные рендеринги
+        setUser(userData.user);
+        setError(null);
+        
+        // Добавляем расширенное логирование данных пользователя в режиме разработки
+        if (process.env.NODE_ENV === 'development' || true) { // Временно включаем логи на продакшене
+          debug('Подробные данные пользователя:', {
+            id: userData.user.id,
+            email: userData.user.email,
+            phone: userData.user.phone,
+            created_at: userData.user.created_at,
+            last_sign_in_at: userData.user.last_sign_in_at,
+            app_metadata: userData.user.app_metadata,
+            user_metadata: userData.user.user_metadata,
+            identities: userData.user.identities?.length
+          });
+          
+          // Добавляем детальные логи для user_metadata для отладки
+          debug('user_metadata детально:', JSON.stringify(userData.user.user_metadata));
+        }
+      } else {
+        debug('Пользователь не найден, не авторизован');
+        // Очищаем данные в глобальном объекте
+        AuthState.user = null;
+        AuthState.session = null;
+        AuthState.isAuthenticated = false;
+        
+        setSession(null);
+        setUser(null);
+        setError(null);
       }
-      
-      setUser(data?.user);
     } catch (err) {
-      debug('Ошибка в getUserAndSaveToState:', err);
+      debug('Ошибка в getUserData:', err);
       setError(getErrMsg(err));
+      // Очищаем данные в глобальном объекте
+      AuthState.user = null;
+      AuthState.session = null;
+      AuthState.isAuthenticated = false;
+      AuthState.error = getErrMsg(err);
+      
+      setUser(null);
+      setSession(null);
+    } finally {
+      setIsLoading(false);
+      // Помечаем, что авторизация инициализирована
+      authManager.setInitialized(true);
+      isFetchingUser.current = false;
+      
+      // Добавляем дополнительную проверку для предотвращения многократных рендерингов
+      AuthState.isLoading = false;
     }
-  }
+  }, [supabaseClient, user]);
 
-  // При первой загрузке, устанавливаем сессию в состояние
+  // Улучшенная обработка событий авторизации с дедупликацией
+  const handleAuthStateChange = useCallback((event: string, updatedSession: Session | null) => {
+    debug('Событие авторизации:', event);
+    debug('Сессия при событии:', updatedSession ? 'Присутствует' : 'Отсутствует');
+    
+    if (updatedSession) {
+      debug('ID пользователя в обновленной сессии:', updatedSession.user.id);
+      debug('Источник авторизации:', updatedSession.user.app_metadata?.provider || 'не указан');
+      debug('Время истечения токена:', new Date(updatedSession.expires_at! * 1000).toISOString());
+    }
+    
+    // Обрабатываем только ключевые события авторизации
+    switch (event) {
+      case 'SIGNED_IN':
+        debug(`Обработка события ${event}`);
+        // Если пользователь уже авторизован с теми же данными, пропускаем обновление
+        if (updatedSession && user?.id === updatedSession.user.id) {
+          debug(`Пропуск обработки ${event}, т.к. пользователь уже авторизован`);
+          return;
+        }
+        
+        // Устанавливаем флаг загрузки в глобальном объекте
+        AuthState.isLoading = true;
+        getUserData();
+        break;
+        
+      case 'INITIAL_SESSION':
+        // Если мы уже обрабатываем SIGNED_IN или уже авторизованы, можно пропустить INITIAL_SESSION
+        if (isFetchingUser.current) {
+          debug('Пропуск обработки INITIAL_SESSION, т.к. данные уже запрашиваются');
+          return;
+        }
+        
+        if (updatedSession && user?.id === updatedSession.user.id) {
+          debug('Пропуск обработки INITIAL_SESSION, т.к. пользователь уже авторизован');
+          return;
+        }
+        
+        debug('Обработка события INITIAL_SESSION');
+        // Устанавливаем флаг загрузки в глобальном объекте
+        AuthState.isLoading = true;
+        getUserData();
+        break;
+        
+      case 'SIGNED_OUT':
+        debug('Очистка данных пользователя при выходе');
+        // Очищаем данные в глобальном объекте
+        AuthState.user = null;
+        AuthState.session = null;
+        AuthState.isAuthenticated = false;
+        
+        setUser(null);
+        setSession(null);
+        setError(null);
+        break;
+        
+      case 'TOKEN_REFRESHED':
+      case 'USER_UPDATED':
+        const eventName = event === 'TOKEN_REFRESHED' ? 'TOKEN_REFRESHED' : 'USER_UPDATED';
+        debug(`Обработка события ${eventName}`);
+        
+        // Пропускаем обновление, если запрос уже выполняется
+        if (isFetchingUser.current) {
+          debug(`Пропуск обновления при ${eventName}, т.к. данные уже запрашиваются`);
+          return;
+        }
+        
+        // Если пользователь не изменился, пропускаем обновление
+        if (updatedSession && user?.id === updatedSession.user.id) {
+          debug(`Пропуск обновления при ${eventName}, т.к. пользователь не изменился`);
+          return;
+        }
+        
+        // Устанавливаем флаг загрузки в глобальном объекте
+        AuthState.isLoading = true;
+        getUserData();
+        break;
+        
+      default:
+        // Не обрабатываем другие события, которые не меняют состояние авторизации
+        debug(`Пропуск обработки события ${event}`);
+        break;
+    }
+  }, [getUserData, user]);
+
+  // Инициализация и подписка на изменения авторизации
   useEffect(() => {
-    debug('Инициализация: получение данных пользователя');
-    getUserAndSaveToState();
-  }, []);
+    // Проверяем, инициализированы ли мы уже
+    if (isInitialized.current) return;
+    isInitialized.current = true;
+    
+    debug('Инициализация компонента');
+    
+    // Создаем единую функцию инициализации
+    const initAuth = async () => {
+      if (typeof window === 'undefined') return;
+      
+      debug('Инициализация авторизации');
+      
+      try {
+        // Сбрасываем флаг инициализации до начала проверки
+        authManager.setInitialized(false);
+        
+        // Явно запускаем процесс обнаружения сессии
+        await supabaseClient.auth.initialize();
+        
+        // Получаем данные пользователя только один раз
+        await getUserData();
+        
+        debug('Авторизация инициализирована');
+      } catch (err) {
+        debug('Ошибка при инициализации авторизации:', err);
+        // Очищаем данные в глобальном объекте
+        AuthState.user = null;
+        AuthState.session = null;
+        AuthState.isAuthenticated = false;
+        AuthState.error = getErrMsg(err);
+        AuthState.isLoading = false;
+        
+        // Даже при ошибке помечаем, что авторизация инициализирована
+        authManager.setInitialized(true);
+      }
+    };
+    
+    // Запускаем инициализацию один раз
+    initAuth();
+    
+    // Устанавливаем слушатель изменений состояния аутентификации
+    const { data: authListener } = supabaseClient.auth.onAuthStateChange(handleAuthStateChange);
+    
+    // Очистка слушателя при размонтировании компонента
+    return () => {
+      debug('Очистка слушателя авторизации');
+      authListener?.subscription.unsubscribe();
+    };
+  }, [supabaseClient, getUserData, handleAuthStateChange]);
 
-  // Глобальные действия, которые можно вызывать из Plasmic Studio
+  // Глобальные действия, доступные в Plasmic Studio
   const actions = useMemo(
     () => ({
       // Логин через Google OAuth
       loginWithGoogle: async () => {
         debug('Попытка входа через Google');
         try {
-          const supabase = createClient();
+          setIsLoading(true);
           
-          const redirectTo = window.location.origin + '/auth/callback';
-          debug('Настройка перенаправления OAuth на:', redirectTo);
+          // Сбрасываем предыдущие ошибки, если они были
+          setError(null);
           
-          const { data, error } = await supabase.auth.signInWithOAuth({
+          // Получаем текущий URL для корректного формирования redirectTo
+          const origin = typeof window !== 'undefined' ? window.location.origin : '';
+          const redirectUrl = `${origin}/auth/callback`;
+          
+          debug('URL для перенаправления после OAuth:', redirectUrl);
+          
+          // Используем signInWithOAuth для авторизации через Google
+          // это сохранит code_verifier в localStorage автоматически
+          const { data, error } = await supabaseClient.auth.signInWithOAuth({
             provider: 'google',
             options: {
-              redirectTo,
+              redirectTo: redirectUrl,
               queryParams: {
+                // Запрашиваем offline-доступ для получения refresh_token
                 access_type: 'offline',
-                prompt: 'consent',
+                // Всегда показывать окно выбора аккаунта
+                prompt: 'select_account'
               }
             }
           });
@@ -149,20 +371,36 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
             throw error;
           }
           
-          // При успешной инициации OAuth, supabase перенаправит на URL авторизации Google
-          debug('OAuth инициирован успешно, перенаправление на URL авторизации');
-          
-          if (data.url) {
-            debug('Перенаправление на URL провайдера:', data.url);
-            window.location.href = data.url;
+          // Проверяем, что получен URL для авторизации
+          if (!data?.url) {
+            debug('Не получен URL для OAuth авторизации');
+            throw new Error('Не удалось получить URL для авторизации');
           }
           
-          return;
+          // Перед перенаправлением проверяем, что у нас сохранен code_verifier
+          if (typeof localStorage !== 'undefined') {
+            const hasCodeVerifier = Object.keys(localStorage).some(key => 
+              key.includes('code_verifier') || key.includes('supabase')
+            );
+            
+            if (!hasCodeVerifier) {
+              debug('Внимание: не найден code_verifier в localStorage перед редиректом');
+            } else {
+              debug('code_verifier найден в localStorage, редирект безопасен');
+            }
+          }
+          
+          // Перенаправляем пользователя на страницу авторизации Google
+          debug('Перенаправление на URL авторизации:', data.url);
+          window.location.href = data.url;
+          
+          return { success: true };
         } catch (e) {
           const errorMsg = getErrMsg(e);
           debug('Ошибка при инициации OAuth входа:', errorMsg);
           setError(errorMsg);
-          return;
+          setIsLoading(false);
+          return { success: false, message: errorMsg };
         }
       },
       
@@ -170,8 +408,7 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
       logout: async () => {
         debug('Попытка выхода');
         try {
-          const supabase = createClient();
-          const { error } = await supabase.auth.signOut();
+          const { error } = await supabaseClient.auth.signOut();
           if (error) {
             debug('Ошибка при выходе:', error);
             throw error;
@@ -180,20 +417,24 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
           // Сбрасываем сессию в состоянии
           debug('Выход успешен, сбрасываем данные пользователя');
           setUser(null);
-
-          // Сбрасываем ошибки если есть
+          setSession(null);
           setError(null);
+          
+          // Сбрасываем состояние AuthManager
+          debug('Сброс состояния авторизации');
+          authManager.reset();
 
           // Перенаправляем на главную страницу при успешном выходе
+          // Важно: используем window.location для полной перезагрузки страницы
           debug('Перенаправление на главную страницу');
           window.location.href = '/';
 
-          return;
+          return { success: true };
         } catch (e) {
           const errorMsg = getErrMsg(e);
           debug('Ошибка при выходе:', errorMsg);
           setError(errorMsg);
-          return;
+          return { success: false, message: errorMsg };
         }
       },
       
@@ -201,10 +442,8 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
       sendOTP: async (email: string) => {
         debug('Попытка отправки OTP на:', email);
         try {
-          const supabase = createClient();
-          
           // Отправляем ссылку для одноразового входа на email
-          const { error } = await supabase.auth.signInWithOtp({
+          const { error } = await supabaseClient.auth.signInWithOtp({
             email,
             options: {
               // Эта опция отключает автоматическую авторизацию при переходе по ссылке,
@@ -239,10 +478,8 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
       verifyOTP: async (email: string, otp: string) => {
         debug('Попытка проверки OTP для:', email, 'с кодом:', otp);
         try {
-          const supabase = createClient();
-          
           // Проверяем OTP код
-          const { data, error } = await supabase.auth.verifyOtp({
+          const { data, error } = await supabaseClient.auth.verifyOtp({
             email,
             token: otp,
             type: 'email'
@@ -253,20 +490,32 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
             throw error;
           }
           
-          // Сохраняем сессию в состояние
-          debug('OTP проверен успешно, сохраняем данные пользователя');
-          if (data?.user) {
-            debug('Данные пользователя после верификации:', JSON.stringify(data.user, null, 2));
+          debug('OTP проверен успешно, данные:', data ? 'получены' : 'отсутствуют');
+          
+          if (data?.session) {
+            debug('Сессия после OTP верификации:', data.session.user.id);
+            
+            // После успешной верификации устанавливаем сессию сразу для предотвращения мигания UI
+            setSession(data.session);
+            
+            // И затем запускаем полное получение данных пользователя асинхронно
+            // чтобы не блокировать интерфейс
+            getUserData().then(() => {
+              debug('Данные пользователя обновлены после OTP верификации');
+            }).catch(err => {
+              debug('Ошибка при обновлении данных после OTP:', err);
+            });
+            
+            // Делаем небольшую задержку перед перенаправлением,
+            // чтобы cookies успели сохраниться
+            setTimeout(() => {
+              debug('Перенаправление после успешной OTP верификации');
+              window.location.href = '/';
+            }, 500);
+          } else {
+            debug('Ошибка: сессия не создана после OTP верификации');
+            throw new Error('Сессия не создана после верификации');
           }
-          
-          setUser(data?.user);
-          
-          // Сбрасываем ошибки если есть
-          setError(null);
-          
-          // Перенаправляем на страницу onboarding после успешного входа
-          debug('Перенаправление на onboarding');
-          window.location.href = '/onboarding';
           
           return { 
             success: true, 
@@ -282,17 +531,56 @@ export const SupabaseUserGlobalContext = ({ children }: SupabaseUserGlobalContex
           };
         }
       },
+      
+      // Проверка текущей сессии (для отладки)
+      checkSession: async () => {
+        debug('Проверка текущей сессии');
+        try {
+          const { data, error } = await supabaseClient.auth.getSession();
+          
+          if (error) {
+            debug('Ошибка при получении сессии:', error);
+            throw error;
+          }
+          
+          debug('Текущая сессия:', data.session?.user.id || 'Нет сессии');
+          return { 
+            success: true, 
+            message: 'Сессия получена',
+            session: data.session
+          };
+        } catch (e) {
+          const errorMsg = getErrMsg(e);
+          debug('Ошибка при проверке сессии:', errorMsg);
+          
+          return { 
+            success: false, 
+            message: errorMsg 
+          };
+        }
+      },
     }),
-    []
+    [supabaseClient, getUserData]
   );
   
   // Настройка данных, которые будут переданы как глобальный контекст в Plasmic Studio
   const dataProviderData: DataProviderData = {
     user,
     error,
+    isAuthenticated,
+    session,
+    isLoading,
+    // Добавляем выделенные поля для удобства доступа из Plasmic
+    userFullName: user?.user_metadata?.full_name || '',
+    userName: user?.user_metadata?.name || '',
+    userEmail: user?.email || '',
+    userAvatar: user?.user_metadata?.avatar_url || '',
+    userPicture: user?.user_metadata?.picture || ''
   };
 
   debug('Рендеринг с данными пользователя:', user?.id);
+  debug('Статус аутентификации:', isAuthenticated ? 'авторизован' : 'не авторизован');
+  debug('Статус инициализации:', isAuthInitialized() ? 'инициализирован' : 'не инициализирован');
   
   // Отрисовка компонентов
   return (

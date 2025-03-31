@@ -3,13 +3,13 @@ import {
   PlasmicComponent,
   extractPlasmicQueryData,
   ComponentRenderData,
-  PlasmicRootProvider,
 } from "@plasmicapp/loader-nextjs";
 import type { GetStaticPaths, GetStaticProps } from "next";
 
 import Error from "next/error";
 import { useRouter } from "next/router";
 import { PLASMIC } from "@/plasmic-init";
+import { CustomPlasmicRootProvider } from "../components/CustomPlasmicRootProvider";
 
 export default function PlasmicLoaderPage(props: {
   plasmicData?: ComponentRenderData;
@@ -22,7 +22,7 @@ export default function PlasmicLoaderPage(props: {
   }
   const pageMeta = plasmicData.entryCompMetas[0];
   return (
-    <PlasmicRootProvider
+    <CustomPlasmicRootProvider
       loader={PLASMIC}
       prefetchedData={plasmicData}
       prefetchedQueryData={queryCache}
@@ -31,7 +31,7 @@ export default function PlasmicLoaderPage(props: {
       pageQuery={router.query}
     >
       <PlasmicComponent component={pageMeta.displayName} />
-    </PlasmicRootProvider>
+    </CustomPlasmicRootProvider>
   );
 }
 
@@ -46,14 +46,14 @@ export const getStaticProps: GetStaticProps = async (context) => {
   const pageMeta = plasmicData.entryCompMetas[0];
   // Cache the necessary data fetched for the page
   const queryCache = await extractPlasmicQueryData(
-    <PlasmicRootProvider
+    <CustomPlasmicRootProvider
       loader={PLASMIC}
       prefetchedData={plasmicData}
       pageRoute={pageMeta.path}
       pageParams={pageMeta.params}
     >
       <PlasmicComponent component={pageMeta.displayName} />
-    </PlasmicRootProvider>
+    </CustomPlasmicRootProvider>
   );
   // Use revalidate if you want incremental static regeneration
   return { props: { plasmicData, queryCache }, revalidate: 60 };

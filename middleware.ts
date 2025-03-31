@@ -1,103 +1,138 @@
-import { createServerClient } from '@supabase/ssr';
-import { NextResponse, type NextRequest } from 'next/server';
+import { createServerClient } from '@supabase/ssr'
+import { NextResponse, type NextRequest } from 'next/server'
 
-// Логи для отладки
+// Определение логирования
 const logPrefix = '[Middleware]';
-const debug = (...args: any[]) => console.log(logPrefix, ...args);
+// Включаем логи только в development режиме
+const DEBUG = process.env.NODE_ENV !== 'production';
+const debug = (...message: unknown[]) => {
+  if (DEBUG) {
+    console.log(logPrefix, ...message);
+  }
+};
 
-// Путь к странице входа
+// Страница логина
 const loginPage = '/';
 
-// Путь к странице onboarding
-const onboardingPage = '/onboarding';
-
-// Добавьте сюда публичные (не требующие входа) маршруты
-// Все другие маршруты будут защищены и требовать входа
-// Важно: plasmic-host и ваша страница входа всегда должны быть публичными
+// Публичные маршруты (не требуют авторизации)
 const publicRoutes = [
-  '/',
-  '/plasmic-host',
-  '/auth/callback',
+  '/',                   // Главная страница
+  '/auth/callback',      // Страница обработки OAuth callback
+  '/plasmic-host'        // Plasmic host
 ];
 
-// Функция middleware
-// Она будет выполняться при каждом запросе к вашему приложению, соответствующему шаблону внизу этого файла
-// Адаптирована из документации @supabase/ssr https://supabase.com/docs/guides/auth/server-side/nextjs
+/**
+ * Middleware для проверки авторизации и управления доступом к страницам
+ * Основано на официальной документации Supabase для Next.js Pages Router
+ * @see https://supabase.com/docs/guides/auth/auth-helpers/nextjs-pages
+ */
 export async function middleware(request: NextRequest) {
-  debug('Запуск middleware для:', request.nextUrl.pathname);
-
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
-
-  // Создаем новый supabase клиент
-  // Обновляем истекшие токены аутентификации и устанавливаем новые cookies
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({
-            request,
-          });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
+  try {
+    debug('Начало обработки middleware для:', request.nextUrl.pathname);
+    
+    // Создаем базовый ответ, который будем модифицировать по необходимости
+    const response = NextResponse.next({
+      request: {
+        headers: request.headers,
       },
+    });
+
+    // Создаем серверный клиент Supabase для проверки сессии
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name) {
+            const cookie = request.cookies.get(name)?.value;
+            debug(`Получение cookie ${name}:`, cookie ? '[найдено]' : '[не найдено]');
+            return cookie;
+          },
+          set(name, value, options) {
+            debug(`Установка cookie ${name}`);
+            request.cookies.set({
+              name,
+              value,
+              ...options,
+            });
+            response.cookies.set({
+              name,
+              value,
+              ...options,
+            });
+          },
+          remove(name, options) {
+            debug(`Удаление cookie ${name}`);
+            request.cookies.delete(name);
+            response.cookies.delete(name);
+          },
+        },
+      }
+    );
+
+    // Получаем текущую сессию пользователя с серверной стороны
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError) {
+      debug('Ошибка при получении сессии:', sessionError.message);
     }
-  );
+    
+    // Текущий путь запроса
+    const path = request.nextUrl.pathname;
+    
+    // Отключаем кэширование для более предсказуемого поведения
+    response.headers.set('x-middleware-cache', 'no-cache');
+    
+    // Логируем информацию о пользователе для отладки
+    if (session) {
+      debug('Пользователь авторизован:', {
+        id: session.user.id,
+        email: session.user.email,
+        provider: session.user.app_metadata?.provider
+      });
+    } else {
+      debug('Пользователь не авторизован');
+    }
+    
+    // Проверяем, является ли путь публичным
+    const isPublicRoute = publicRoutes.some(route => 
+      path === route || path.startsWith(`${route}/`)
+    );
+    
+    debug(`Проверка маршрута: ${path}, публичный: ${isPublicRoute}, авторизован: ${!!session}`);
 
-  // ВАЖНО: Избегайте написания логики между createServerClient и
-  // supabase.auth.getUser(). Простая ошибка может сделать очень сложным отладку
-  // проблем с пользователями, которые случайно выходят из системы.
-
-  // Получаем данные залогиненного пользователя, если он есть
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  
-  debug('Пользователь:', user ? 'авторизован' : 'не авторизован');
-  
-  // Если пользователь авторизован и находится на главной странице, 
-  // перенаправляем на страницу onboarding
-  if (user && request.nextUrl.pathname === '/') {
-    debug('Авторизованный пользователь на главной странице, перенаправление на:', onboardingPage);
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = onboardingPage;
-    return NextResponse.redirect(redirectUrl);
+    // Если путь не публичный и пользователь не авторизован - перенаправляем на главную
+    if (!isPublicRoute && !session) {
+      debug(`Перенаправление неавторизованного пользователя с ${path} на /`);
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    
+    // Если пользователь авторизован и пытается посетить главную страницу - перенаправляем на /onboarding
+    if (session && path === '/') {
+      debug(`Перенаправление авторизованного пользователя с / на /onboarding`);
+      return NextResponse.redirect(new URL('/onboarding', request.url));
+    }
+    
+    // Во всех остальных случаях продолжаем выполнение запроса
+    debug('Продолжение обработки запроса без перенаправления');
+    return response;
+    
+  } catch (err) {
+    console.error('Ошибка в middleware:', err);
+    // В случае ошибки пропускаем запрос, чтобы система продолжала работать
+    return NextResponse.next();
   }
-  
-  // Решаем, нужно ли перенаправлять на страницу / или нет
-  // Если маршрут не в списке публичных и пользователь не авторизован,
-  // перенаправляем на главную страницу
-  if (publicRoutes.includes(request.nextUrl.pathname) !== true && !user) {
-    // Это защищенный маршрут, но пользователь не вошел в систему
-    // Перенаправляем на страницу входа
-    debug('Перенаправление на страницу входа:', loginPage);
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = loginPage;
-    redirectUrl.searchParams.set('from', request.nextUrl.pathname);
-    return NextResponse.redirect(redirectUrl);
-  }
-
-  return supabaseResponse;
 }
 
-// Только запускаем middleware для запросов, соответствующих этому шаблону
+// Определяет, на каких маршрутах будет запускаться middleware
 export const config = {
   matcher: [
     /*
-     * Совпадает со всеми путями кроме:
-     * - файлов с расширением (например, файлы в /public)
-     * - опционально, путей, начинающихся с _next/static или _next/image
-     * - опционально, api/auth/* (для кастомных обработчиков авторизации)
+     * Обрабатываем все запросы, кроме:
+     * - Статических ресурсов (_next/static)
+     * - Изображений (_next/image)
+     * - Favicon и других часто запрашиваемых статических файлов
      */
-    '/((?!_next/static|_next/image|favicon.ico|.+\\..+).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }; 

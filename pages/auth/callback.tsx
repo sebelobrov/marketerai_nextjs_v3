@@ -1,72 +1,135 @@
-import { useRouter } from 'next/router';
-import { useEffect } from 'react';
-import createClient from '../../utils/supabase/component';
+import type { NextPage } from 'next';
+import { useEffect, useState } from 'react';
+import { createClient } from '../../utils/supabase/client';
+import Head from "next/head";
 
-// Логи для отладки
-const logPrefix = '[AuthCallback]';
-const debug = (...message: unknown[]) => console.log(logPrefix, ...message);
+// Компонент загрузки с белым фоном
+const LoadingScreen = () => (
+  <div style={{ 
+    display: 'flex', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    height: '100vh',
+    width: '100%',
+    backgroundColor: '#ffffff'
+  }}>
+    <div className="loading-spinner"></div>
+  </div>
+);
 
-export default function AuthCallback() {
-  const router = useRouter();
+const AuthCallbackPage: NextPage = () => {
+  const [error, setError] = useState<string | null>(null);
+  const [detailsVisible, setDetailsVisible] = useState(false);
+  const [details] = useState<string>("");
 
   useEffect(() => {
-    debug('Инициализация страницы обратного вызова');
-    
     const handleCallback = async () => {
       try {
-        debug('Начало обработки callback');
-        
-        // Проверяем, что мы на клиенте
-        if (typeof window === 'undefined') {
-          debug('Мы на сервере, пропускаем обработку');
-          return;
-        }
-
+        console.log('Обработка OAuth колбэка...');
         const supabase = createClient();
         
-        // Получаем хэш из URL
-        const hash = window.location.hash;
+        // Простой, но эффективный метод обработки OAuth колбэка
+        // Supabase автоматически найдет code_verifier в localStorage
+        const { data, error: sessionError } = await supabase.auth.getSession();
         
-        // Если есть хэш, значит это обратный вызов от провайдера OAuth
-        if (hash) {
-          debug('Обрабатываем хэш:', hash);
-          
-          // Обрабатываем сессию
-          const { data, error } = await supabase.auth.getSession();
-          
-          if (error) {
-            debug('Ошибка при получении сессии:', error);
-            throw error;
-          }
-          
-          if (data.session) {
-            debug('Сессия получена успешно:', data.session.user.id);
-            
-            // Перенаправляем на страницу onboarding
-            const redirectUrl = '/onboarding';
-            debug('Перенаправление на:', redirectUrl);
-            router.push(redirectUrl);
-          } else {
-            debug('Сессия не создана после OAuth');
-            router.push('/');
-          }
-        } else {
-          debug('Нет хэша в URL, возможно это не callback');
-          router.push('/');
+        if (sessionError) {
+          console.error('Ошибка при получении сессии:', sessionError);
+          setError(`Ошибка аутентификации: ${sessionError.message}`);
+          return;
         }
-      } catch (error) {
-        debug('Ошибка при обработке callback:', error);
-        console.error('Ошибка при обработке callback:', error);
-        router.push('/');
+        
+        // Проверяем, что сессия успешно получена
+        if (data.session) {
+          console.log('Успешная аутентификация через OAuth');
+          
+          // Небольшая задержка, чтобы убедиться, что cookies сохранены
+          setTimeout(() => {
+            window.location.replace('/onboarding');
+          }, 500);
+        } else {
+          console.error('Сессия не установлена после OAuth');
+          setError('Не удалось установить сессию при входе через Google');
+        }
+      } catch (err) {
+        console.error('Ошибка при обработке OAuth колбэка:', err);
+        setError('Произошла ошибка при аутентификации');
       }
     };
-
+    
     handleCallback();
-  }, [router]);
+  }, []);
+  
+  // Отображаем состояние
+  if (error) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column',
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        width: '100%',
+        backgroundColor: '#ffffff',
+        padding: '20px',
+        textAlign: 'center'
+      }}>
+        <Head>
+          <title>Авторизация</title>
+        </Head>
+        <h2>Ошибка аутентификации</h2>
+        <p>{error}</p>
+        
+        {details && (
+          <div style={{ marginTop: '20px' }}>
+            <button 
+              onClick={() => setDetailsVisible(!detailsVisible)}
+              style={{
+                padding: '8px 16px',
+                border: 'none',
+                borderRadius: '4px',
+                background: '#f0f0f0',
+                cursor: 'pointer'
+              }}
+            >
+              {detailsVisible ? 'Скрыть детали' : 'Показать детали'}
+            </button>
+            
+            {detailsVisible && (
+              <pre style={{ 
+                textAlign: 'left', 
+                marginTop: '10px',
+                padding: '15px',
+                background: '#f8f8f8',
+                borderRadius: '4px',
+                overflow: 'auto',
+                maxWidth: '500px'
+              }}>
+                {details}
+              </pre>
+            )}
+          </div>
+        )}
+        
+        <button 
+          onClick={() => window.location.href = '/'}
+          style={{
+            marginTop: '20px',
+            padding: '10px 20px',
+            border: 'none',
+            borderRadius: '4px',
+            backgroundColor: '#0070f3',
+            color: 'white',
+            cursor: 'pointer'
+          }}
+        >
+          Вернуться на главную
+        </button>
+      </div>
+    );
+  }
+  
+  // В процессе обработки отображаем загрузку
+  return <LoadingScreen />;
+};
 
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <p className="text-center text-lg">Выполняется вход...</p>
-    </div>
-  );
-} 
+export default AuthCallbackPage; 
