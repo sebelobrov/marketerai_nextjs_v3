@@ -2,6 +2,7 @@ import { initPlasmicLoader } from "@plasmicapp/loader-nextjs";
 import OtpInput from "./components/antd/OtpInput";
 import OTPSender from "./components/antd/OTPSender";
 import OTPVerify from "./components/antd/OTPVerify";
+import ProjectListSkeleton from "./components/ProjectListSkeleton";
 
 // Импорт компонентов Supabase
 import { 
@@ -175,4 +176,21 @@ PLASMIC.registerComponent(OTPVerify, {
       ]
     }
   }
+});
+
+// Регистрация компонента скелетона
+PLASMIC.registerComponent(ProjectListSkeleton, {
+  name: "ProjectListSkeleton",
+  props: {
+    itemCount: {
+      type: "number",
+      defaultValue: 3,
+      description: "Количество элементов скелетона"
+    },
+    className: {
+      type: "string",
+      description: "CSS класс для компонента"
+    }
+  },
+  description: "Скелетон для списка проектов, который отображается во время загрузки"
 });
