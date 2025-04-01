@@ -3,6 +3,7 @@ import OtpInput from "./components/antd/OtpInput";
 import OTPSender from "./components/antd/OTPSender";
 import OTPVerify from "./components/antd/OTPVerify";
 import ProjectListSkeleton from "./components/ProjectListSkeleton";
+import Badge from "./components/antd/Badge";
 
 // Импорт компонентов Supabase
 import { 
@@ -193,4 +194,49 @@ PLASMIC.registerComponent(ProjectListSkeleton, {
     }
   },
   description: "Скелетон для списка проектов, который отображается во время загрузки"
+});
+
+// Регистрация компонента Badge
+PLASMIC.registerComponent(Badge, {
+  name: "Badge",
+  props: {
+    count: {
+      type: "string",
+      description: "Число для отображения в бейдже"
+    },
+    showZero: {
+      type: "boolean",
+      defaultValue: false,
+      description: "Показывать ли бейдж при нулевом значении"
+    },
+    overflowCount: {
+      type: "number",
+      defaultValue: 99,
+      description: "Максимальное значение для отображения"
+    },
+    dot: {
+      type: "boolean",
+      defaultValue: false,
+      description: "Отображать ли только точку вместо числа"
+    },
+    status: {
+      type: "choice",
+      options: ["success", "processing", "default", "error", "warning"],
+      description: "Статус бейджа"
+    },
+    color: {
+      type: "string",
+      description: "Настраиваемый цвет бейджа"
+    },
+    text: {
+      type: "string",
+      description: "Текст для отображения рядом со статусом"
+    },
+    size: {
+      type: "choice",
+      options: ["default", "small"],
+      description: "Размер бейджа"
+    },
+    children: "slot",
+  }
 });
