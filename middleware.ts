@@ -1,5 +1,5 @@
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server';
+import { createMiddlewareClient } from './utils/supabase/supabase-client';
 
 // Определение логирования
 const logPrefix = '[Middleware]';
@@ -21,105 +21,76 @@ const publicRoutes = [
   '/plasmic-host'        // Plasmic host
 ];
 
+// Паттерны для статических ресурсов, которые следует пропускать
+const staticPatterns = [
+  /^\/(_next|static)\//,
+  /\.(ico|png|jpg|jpeg|gif|svg|css|js|woff|woff2|ttf|eot)$/i,
+  /^\/(favicon\.ico|robots\.txt|manifest\.json|sw\.js)$/
+];
+
+// Функция для проверки, является ли путь статическим ресурсом
+const isStaticResource = (path: string): boolean => {
+  return staticPatterns.some(pattern => {
+    if (pattern instanceof RegExp) {
+      return pattern.test(path);
+    }
+    return path === pattern;
+  });
+};
+
 /**
- * Middleware для проверки авторизации и управления доступом к страницам
+ * Middleware для обработки авторизации и маршрутизации
  * Основано на официальной документации Supabase для Next.js Pages Router
  * @see https://supabase.com/docs/guides/auth/auth-helpers/nextjs-pages
  */
 export async function middleware(request: NextRequest) {
   try {
-    debug('Начало обработки middleware для:', request.nextUrl.pathname);
-    
-    // Создаем базовый ответ, который будем модифицировать по необходимости
-    const response = NextResponse.next({
-      request: {
-        headers: request.headers,
-      },
-    });
-
-    // Создаем серверный клиент Supabase для проверки сессии
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name) {
-            const cookie = request.cookies.get(name)?.value;
-            debug(`Получение cookie ${name}:`, cookie ? '[найдено]' : '[не найдено]');
-            return cookie;
-          },
-          set(name, value, options) {
-            debug(`Установка cookie ${name}`);
-            request.cookies.set({
-              name,
-              value,
-              ...options,
-            });
-            response.cookies.set({
-              name,
-              value,
-              ...options,
-            });
-          },
-          remove(name, options) {
-            debug(`Удаление cookie ${name}`);
-            request.cookies.delete(name);
-            response.cookies.delete(name);
-          },
-        },
-      }
-    );
-
-    // Получаем текущую сессию пользователя с серверной стороны
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    
-    if (sessionError) {
-      debug('Ошибка при получении сессии:', sessionError.message);
-    }
-    
-    // Текущий путь запроса
     const path = request.nextUrl.pathname;
     
-    // Отключаем кэширование для более предсказуемого поведения
-    response.headers.set('x-middleware-cache', 'no-cache');
-    
-    // Логируем информацию о пользователе для отладки
-    if (session) {
-      debug('Пользователь авторизован:', {
-        id: session.user.id,
-        email: session.user.email,
-        provider: session.user.app_metadata?.provider
-      });
-    } else {
-      debug('Пользователь не авторизован');
+    // Пропускаем статические ресурсы без обработки
+    if (staticPatterns.some(pattern => pattern.test(path))) {
+      return NextResponse.next();
     }
+    
+    debug('Проверка авторизации для:', path);
+    
+    // Создаем базовый ответ
+    const response = NextResponse.next();
+    
+    // Отключаем кэширование для предсказуемого поведения
+    response.headers.set('x-middleware-cache', 'no-cache');
+
+    // Создаем клиент Supabase
+    const supabase = createMiddlewareClient(request, response);
+
+    // Проверяем пользователя
+    const { data } = await supabase.auth.getUser();
+    const user = data?.user;
     
     // Проверяем, является ли путь публичным
     const isPublicRoute = publicRoutes.some(route => 
       path === route || path.startsWith(`${route}/`)
     );
     
-    debug(`Проверка маршрута: ${path}, публичный: ${isPublicRoute}, авторизован: ${!!session}`);
+    debug(`Маршрут: ${path}, публичный: ${isPublicRoute}, авторизован: ${!!user}`);
 
     // Если путь не публичный и пользователь не авторизован - перенаправляем на главную
-    if (!isPublicRoute && !session) {
+    if (!isPublicRoute && !user) {
       debug(`Перенаправление неавторизованного пользователя с ${path} на /`);
       return NextResponse.redirect(new URL('/', request.url));
     }
     
     // Если пользователь авторизован и пытается посетить главную страницу - перенаправляем на /onboarding
-    if (session && path === '/') {
+    if (user && path === '/') {
       debug(`Перенаправление авторизованного пользователя с / на /onboarding`);
       return NextResponse.redirect(new URL('/onboarding', request.url));
     }
     
-    // Во всех остальных случаях продолжаем выполнение запроса
-    debug('Продолжение обработки запроса без перенаправления');
+    // Во всех остальных случаях продолжаем обработку запроса
     return response;
     
   } catch (err) {
     console.error('Ошибка в middleware:', err);
-    // В случае ошибки пропускаем запрос, чтобы система продолжала работать
     return NextResponse.next();
   }
 }

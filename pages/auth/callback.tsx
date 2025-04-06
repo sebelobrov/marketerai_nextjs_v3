@@ -1,7 +1,16 @@
 import type { NextPage } from 'next';
 import { useEffect, useState } from 'react';
-import { createClient } from '../../utils/supabase/client';
+import { createClient } from '../../utils/supabase/supabase-client';
 import Head from "next/head";
+
+// Настройка логирования
+const logPrefix = '[AuthCallback]';
+const DEBUG = process.env.NODE_ENV !== 'production';
+const debug = (...message: unknown[]) => {
+  if (DEBUG) {
+    console.log(logPrefix, ...message);
+  }
+};
 
 // Компонент загрузки с белым фоном
 const LoadingScreen = () => (
@@ -25,29 +34,35 @@ const AuthCallbackPage: NextPage = () => {
   useEffect(() => {
     const handleCallback = async () => {
       try {
-        console.log('Обработка OAuth колбэка...');
+        debug('Обработка OAuth колбэка...');
+        
+        // Используем синглтон клиента Supabase
         const supabase = createClient();
         
-        // Простой, но эффективный метод обработки OAuth колбэка
-        // Supabase автоматически найдет code_verifier в localStorage
+        // auth.initialize() уже вызван в синглтоне, не нужно вызывать повторно
+        debug('Получение сессии после OAuth авторизации');
+        
+        // Сессия должна быть автоматически установлена при обработке параметров URL
         const { data, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) {
-          console.error('Ошибка при получении сессии:', sessionError);
+          debug('Ошибка при получении сессии:', sessionError);
           setError(`Ошибка аутентификации: ${sessionError.message}`);
           return;
         }
         
         // Проверяем, что сессия успешно получена
         if (data.session) {
-          console.log('Успешная аутентификация через OAuth');
+          debug('Успешная аутентификация через OAuth:', data.session.user.id);
+          debug('Провайдер авторизации:', data.session.user.app_metadata?.provider || 'не указан');
           
           // Небольшая задержка, чтобы убедиться, что cookies сохранены
           setTimeout(() => {
+            debug('Перенаправление на /onboarding');
             window.location.replace('/onboarding');
           }, 500);
         } else {
-          console.error('Сессия не установлена после OAuth');
+          debug('Сессия не установлена после OAuth');
           setError('Не удалось установить сессию при входе через Google');
         }
       } catch (err) {

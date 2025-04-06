@@ -1,6 +1,15 @@
 import React, { forwardRef, useImperativeHandle, useCallback } from 'react';
 import { DataProvider } from '@plasmicapp/host';
-import { createClient } from '../../utils/supabase/client';
+import { createClient } from '../../utils/supabase/supabase-client';
+
+// Настройка логирования
+const logPrefix = '[OTPVerify]';
+const DEBUG = process.env.NODE_ENV !== 'production';
+const debug = (...message: unknown[]) => {
+  if (DEBUG) {
+    console.log(logPrefix, ...message);
+  }
+};
 
 interface OTPVerifyProps {
   onSuccess?: (message: string) => void;
@@ -35,9 +44,9 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
     message: "Ожидание ввода кода подтверждения"
   });
 
-  // Сообщаем в консоль о текущем состоянии result для отладки
+  // Логируем текущее состояние result для отладки
   React.useEffect(() => {
-    console.log("OTPVerify result:", result);
+    debug("Состояние результата верификации:", result);
   }, [result]);
 
   // Обернем в useCallback для предотвращения лишних рендеров
@@ -57,7 +66,7 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
     }
     
     try {
-      console.log("Verifying OTP:", email, otp);
+      debug("Проверка OTP:", email, otp);
       
       // Устанавливаем промежуточный статус проверки
       setResult({
@@ -65,6 +74,7 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
         message: `Проверка кода для ${email}...`
       });
       
+      // Используем синглтон клиента Supabase
       const supabase = createClient();
       const response = await supabase.auth.verifyOtp({
         email,
@@ -80,6 +90,7 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
       setVerified(true);
       
       const successMsg = 'Код успешно подтвержден';
+      debug("OTP успешно подтвержден");
       setResult({
         success: true,
         message: successMsg
@@ -92,13 +103,14 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
       // Принудительно перенаправляем пользователя на onboarding после успешной верификации
       // Задержка обеспечивает корректное сохранение cookies и обработку авторизации
       setTimeout(() => {
-        console.log("OTPVerify: Принудительное перенаправление на /onboarding");
+        debug("Принудительное перенаправление на /onboarding");
         window.location.href = "/onboarding";
       }, 1000);
       
       return { success: true, message: successMsg };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Произошла ошибка при проверке кода';
+      debug("Ошибка при проверке OTP:", errorMsg);
       setResult({
         success: false,
         message: errorMsg
@@ -115,6 +127,7 @@ const OTPVerify = forwardRef<OTPVerifyActions, OTPVerifyProps>(({
   // Автоматическая верификация при наличии нужных параметров
   React.useEffect(() => {
     if (autoVerify && initialEmail && initialCode && !verified) {
+      debug("Автоматическая проверка OTP с начальными значениями");
       handleVerifyOTP(initialEmail, initialCode);
     }
   }, [autoVerify, initialEmail, initialCode, verified, handleVerifyOTP]);

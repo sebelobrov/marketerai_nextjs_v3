@@ -1,6 +1,15 @@
 import React, { forwardRef, useImperativeHandle, useCallback } from 'react';
 import { DataProvider } from '@plasmicapp/host';
-import { createClient } from '../../utils/supabase/client';
+import { createClient } from '../../utils/supabase/supabase-client';
+
+// Настройка логирования
+const logPrefix = '[OTPSender]';
+const DEBUG = process.env.NODE_ENV !== 'production';
+const debug = (...message: unknown[]) => {
+  if (DEBUG) {
+    console.log(logPrefix, ...message);
+  }
+};
 
 // Определение интерфейса для свойств компонента
 export interface OTPSenderProps {
@@ -50,7 +59,7 @@ const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({
     }
     
     try {
-      console.log("Sending OTP to:", email);
+      debug("Отправка OTP на:", email);
       
       // Устанавливаем промежуточный статус отправки
       setResult({
@@ -58,6 +67,7 @@ const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({
         message: `Отправка кода на ${email}...`
       });
       
+      // Используем синглтон клиента Supabase
       const supabase = createClient();
       const response = await supabase.auth.signInWithOtp({
         email,
@@ -72,6 +82,7 @@ const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({
       
       // При успешной отправке
       const successMsg = `Код подтверждения отправлен на ${email}`;
+      debug("OTP успешно отправлен");
       setResult({
         success: true,
         message: successMsg
@@ -90,7 +101,7 @@ const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({
         message: errorMsg
       });
       
-      console.error("Error sending OTP:", { success: false, message: errorMsg });
+      debug("Ошибка при отправке OTP:", errorMsg);
       
       if (onError) {
         onError(errorMsg);
@@ -103,7 +114,7 @@ const OTPSender = forwardRef<OTPSenderRef, OTPSenderProps>(({
   // Отправляем OTP автоматически при монтировании, если указаны autoSend и initialEmail
   React.useEffect(() => {
     if (autoSend && initialEmail) {
-      console.log("Auto-sending OTP to:", initialEmail);
+      debug("Автоматическая отправка OTP на:", initialEmail);
       handleSendOTP(initialEmail);
     }
   }, [autoSend, initialEmail, handleSendOTP]);
