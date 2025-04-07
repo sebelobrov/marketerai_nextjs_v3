@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PlasmicRootProvider } from '@plasmicapp/loader-nextjs';
 import { PLASMIC } from '../plasmic-init';
 import { createClient } from '../utils/supabase/supabase-client';
@@ -6,7 +6,7 @@ import type { ComponentRenderData } from '@plasmicapp/loader-nextjs';
 import { ParsedUrlQuery } from 'querystring';
 import { authManager } from '../utils/auth/AuthManager';
 import { isAuthInitialized, AuthState } from '../components/supabase/SupabaseUserGlobalContext';
-import { ThemeProvider, useTheme, ThemeContext } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 
 // Конфигурация логов
 const logPrefix = '[PlasmicRoot]';
