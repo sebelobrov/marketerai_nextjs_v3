@@ -240,3 +240,38 @@ PLASMIC.registerComponent(Badge, {
     children: "slot",
   }
 });
+
+// Регистрация компонента ThemeToggleButton
+import ThemeToggleButton from "./components/ThemeToggleButton";
+
+PLASMIC.registerComponent(ThemeToggleButton, {
+  name: "ThemeToggleButton",
+  providesData: true,
+  props: {
+    className: {
+      type: "string",
+      description: "CSS class name for styling the button",
+    },
+    children: {
+      type: "slot",
+    }
+  },
+  importPath: "./components/ThemeToggleButton",
+  isDefaultExport: true,
+  refActions: {
+    setTheme: {
+      displayName: "Set Theme",
+      argTypes: [
+        {
+          name: "themeValue",
+          displayName: "Theme (light/dark)",
+          type: { 
+            type: "choice", 
+            options: ["light", "dark"] 
+          },
+        },
+      ],
+    },
+  },
+  description: "Wrapper component to provide theme state ('light' | 'dark') and actions (setTheme) to children via DataProvider and Element Actions."
+});

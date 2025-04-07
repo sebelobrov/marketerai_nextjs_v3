@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { PlasmicRootProvider } from '@plasmicapp/loader-nextjs';
 import { PLASMIC } from '../plasmic-init';
 import { createClient } from '../utils/supabase/supabase-client';
@@ -6,6 +6,7 @@ import type { ComponentRenderData } from '@plasmicapp/loader-nextjs';
 import { ParsedUrlQuery } from 'querystring';
 import { authManager } from '../utils/auth/AuthManager';
 import { isAuthInitialized, AuthState } from '../components/supabase/SupabaseUserGlobalContext';
+import { ThemeProvider, useTheme, ThemeContext } from './contexts/ThemeContext';
 
 // Конфигурация логов
 const logPrefix = '[PlasmicRoot]';
@@ -41,6 +42,33 @@ export interface CustomPlasmicRootProviderProps {
   pageParams?: Record<string, string>;
   pageQuery?: ParsedUrlQuery;
   children: React.ReactNode;
+}
+
+// Внутренний компонент для доступа к контексту темы
+function InnerCustomPlasmicRootProvider({
+  loader,
+  prefetchedData,
+  prefetchedQueryData,
+  pageRoute,
+  pageParams,
+  pageQuery,
+  children,
+}: CustomPlasmicRootProviderProps) {
+  const { theme } = useTheme(); // Получаем тему из контекста
+
+  return (
+    <PlasmicRootProvider
+      loader={loader}
+      prefetchedData={prefetchedData}
+      prefetchedQueryData={prefetchedQueryData}
+      pageRoute={pageRoute}
+      pageParams={pageParams}
+      pageQuery={pageQuery}
+      globalVariants={[{ name: 'Mode', value: theme }]} // Передаем тему как глобальный вариант 'Mode'
+    >
+      {children}
+    </PlasmicRootProvider>
+  );
 }
 
 export function CustomPlasmicRootProvider({
@@ -154,15 +182,18 @@ export function CustomPlasmicRootProvider({
   
   // Рендерим Plasmic компоненты когда авторизация готова
   return (
-    <PlasmicRootProvider
-      loader={loader}
-      prefetchedData={prefetchedData}
-      prefetchedQueryData={prefetchedQueryData}
-      pageRoute={pageRoute}
-      pageParams={pageParams}
-      pageQuery={pageQuery}
-    >
-      {children}
-    </PlasmicRootProvider>
+    // Оборачиваем все в ThemeProvider
+    <ThemeProvider> 
+      <InnerCustomPlasmicRootProvider
+        loader={loader}
+        prefetchedData={prefetchedData}
+        prefetchedQueryData={prefetchedQueryData}
+        pageRoute={pageRoute}
+        pageParams={pageParams}
+        pageQuery={pageQuery}
+      >
+        {children}
+      </InnerCustomPlasmicRootProvider>
+    </ThemeProvider>
   );
 } 
